@@ -1,0 +1,14 @@
+1. Change versions
+
+(See commit https://github.com/opentable/kafka/pull/1/commits/cc4e523bd8f1b880bb123cd06f9d15c06603cfb5)
+
+2. build jars
+
+./gradlew clean jar 
+./gradlew srcJar
+
+3. Copy them from build/libs directory to /pom directory
+
+4. Change pom appropriately
+
+5. Deploy to artifactory internal-local
