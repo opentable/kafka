@@ -76,6 +76,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
+ *
+ * Attempt to port https://github.com/apache/kafka/pull/7460/files#
+ *
  * AbstractCoordinator implements group management for a single group member by interacting with
  * a designated Kafka broker (the coordinator). Group semantics are provided by extending this class.
  * See {@link ConsumerCoordinator} for example usage.
@@ -407,8 +410,10 @@ public abstract class AbstractCoordinator implements Closeable {
             // refresh which changes the matched subscription set) can occur while another rebalance is
             // still in progress.
             if (needsJoinPrepare) {
-                onJoinPrepare(generation.generationId, generation.memberId);
+                // need to set the flag before calling onJoinPrepare since the user callback may throw
+                // exception, in which case upon retry we should not retry onJoinPrepare either.
                 needsJoinPrepare = false;
+                onJoinPrepare(generation.generationId, generation.memberId);
             }
 
             final RequestFuture<ByteBuffer> future = initiateJoinGroup();
@@ -419,14 +424,32 @@ public abstract class AbstractCoordinator implements Closeable {
             }
 
             if (future.succeeded()) {
-                // Duplicate the buffer in case `onJoinComplete` does not complete and needs to be retried.
-                ByteBuffer memberAssignment = future.value().duplicate();
-                onJoinComplete(generation.generationId, generation.memberId, generation.protocol, memberAssignment);
+                Generation generationSnapshot;
 
-                // We reset the join group future only after the completion callback returns. This ensures
-                // that if the callback is woken up, we will retry it on the next joinGroupIfNeeded.
-                resetJoinGroupFuture();
-                needsJoinPrepare = true;
+                // Generation data maybe concurrently cleared by Heartbeat thread.
+                // Can't use synchronized for {@code onJoinComplete}, because it can be long enough
+                // and  shouldn't block hearbeat thread.
+                // See {@link PlaintextConsumerTest#testMaxPollIntervalMsDelayInAssignment
+                synchronized (this) {
+                    generationSnapshot = this.generation;
+                }
+
+                if (generationSnapshot != Generation.NO_GENERATION) {
+                    // Duplicate the buffer in case `onJoinComplete` does not complete and needs to be retried.
+                    ByteBuffer memberAssignment = future.value().duplicate();
+
+                    onJoinComplete(generationSnapshot.generationId, generationSnapshot.memberId, generationSnapshot.protocol, memberAssignment);
+
+                    // We reset the join group future only after the completion callback returns. This ensures
+                    // that if the callback is woken up, we will retry it on the next joinGroupIfNeeded.
+                    resetJoinGroupFuture();
+                    needsJoinPrepare = true;
+                } else {
+                    log.info("Generation data was cleared by heartbeat thread. Initiating rejoin.");
+                    resetStateAndRejoin();
+
+                    return false;
+                }
             } else {
                 resetJoinGroupFuture();
                 final RuntimeException exception = future.exception();
@@ -438,10 +461,16 @@ public abstract class AbstractCoordinator implements Closeable {
                 else if (!future.isRetriable())
                     throw exception;
 
-                timer.sleep(retryBackoffMs);
+                // Added in another PR as a customer configurable. The default if 100, so we'll use that
+                timer.sleep(100);
             }
         }
         return true;
+    }
+
+    private void resetStateAndRejoin() {
+        rejoinNeeded = true;
+        state = MemberState.UNJOINED;
     }
 
     private synchronized void resetJoinGroupFuture() {
@@ -466,12 +495,22 @@ public abstract class AbstractCoordinator implements Closeable {
                     // handle join completion in the callback so that the callback will be invoked
                     // even if the consumer is woken up before finishing the rebalance
                     synchronized (AbstractCoordinator.this) {
-                        log.info("Successfully joined group with generation {}", generation.generationId);
-                        state = MemberState.STABLE;
-                        rejoinNeeded = false;
+                        if (generation != Generation.NO_GENERATION) {
+                            log.info("Successfully joined group with generation {}", generation.generationId);
+                            state = MemberState.STABLE;
+                            rejoinNeeded = false;
+                            // https://github.com/apache/kafka/pull/7347/files shows these are just metrics
+                            // record rebalance latency
+//                            lastRebalanceEndMs = time.milliseconds();
+//                            sensors.successfulRebalanceSensor.record(lastRebalanceEndMs - lastRebalanceStartMs);
+//                            lastRebalanceStartMs = -1L;
 
-                        if (heartbeatThread != null)
-                            heartbeatThread.enable();
+                            if (heartbeatThread != null)
+                                heartbeatThread.enable();
+                        } else {
+                            log.info("Generation data was cleared by heartbeat thread. Rejoin failed.");
+                            recordRebalanceFailure();
+                        }
                     }
                 }
 
@@ -480,8 +519,13 @@ public abstract class AbstractCoordinator implements Closeable {
                     // we handle failures below after the request finishes. if the join completes
                     // after having been woken up, the exception is ignored and we will rejoin
                     synchronized (AbstractCoordinator.this) {
-                        state = MemberState.UNJOINED;
+                        recordRebalanceFailure();
                     }
+                }
+
+                private void recordRebalanceFailure() {
+                    state = MemberState.UNJOINED;
+//                    sensors.failedRebalanceSensor.record();
                 }
             });
         }
@@ -589,8 +633,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 synchronized (AbstractCoordinator.this) {
                     AbstractCoordinator.this.generation = new Generation(OffsetCommitRequest.DEFAULT_GENERATION_ID,
                             joinResponse.data().memberId(), null);
-                    AbstractCoordinator.this.rejoinNeeded = true;
-                    AbstractCoordinator.this.state = MemberState.UNJOINED;
+                    AbstractCoordinator.this.resetStateAndRejoin();
                 }
                 future.raise(Errors.MEMBER_ID_REQUIRED);
             } else {
@@ -826,8 +869,7 @@ public abstract class AbstractCoordinator implements Closeable {
      */
     protected synchronized void resetGeneration() {
         this.generation = Generation.NO_GENERATION;
-        this.rejoinNeeded = true;
-        this.state = MemberState.UNJOINED;
+        resetStateAndRejoin();
     }
 
     protected synchronized void requestRejoin() {
