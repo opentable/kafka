@@ -12,3 +12,5 @@
 4. Change pom appropriately
 
 5. Deploy to artifactory internal-local
+
+(internal-local)/org/apache/kafka/kafka-clients/<>
