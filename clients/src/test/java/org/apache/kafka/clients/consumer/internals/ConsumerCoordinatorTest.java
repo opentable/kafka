@@ -2272,7 +2272,7 @@ public class ConsumerCoordinatorTest {
             assertEquals(memberId, coordinator.generation().memberId);
 
             // Imitating heartbeat thread that clears generation data.
-            coordinator.maybeLeaveGroup("Clear generation data.");
+            coordinator.maybeLeaveGroup();
 
             assertEquals(AbstractCoordinator.Generation.NO_GENERATION, coordinator.generation());
 
