@@ -1,16 +1,20 @@
-1. Change versions
+0. Write a patch
+1. Change versions to 2.3.1.x
 
 (See commit https://github.com/opentable/kafka/pull/1/commits/cc4e523bd8f1b880bb123cd06f9d15c06603cfb5)
 
-2. build jars
+2. build jars from root
 
 ./gradlew clean jar 
 ./gradlew srcJar
 
-3. Copy them from build/libs directory to /pom directory
+3. Copy the jars from build/libs directory to /pom directory
+4. Change pom appropriately - namely version and filename
 
-4. Change pom appropriately
+5. Deploy to artifactory internal-local. 
 
-5. Deploy to artifactory internal-local
+You'll specify the location under internal-local as
 
-(internal-local)/org/apache/kafka/kafka-clients/<>
+org/apache/kafka/kafka-clients/(version)
+
+You'll want to deploy - the pom, the main jar, the test jar, and the source jar.
