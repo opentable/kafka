@@ -77,7 +77,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  *
- * Attempt to port https://github.com/apache/kafka/pull/7460/files#
+ * Attempt to port https://github.com/apache/kafka/pull/7460/files# and https://github.com/apache/kafka/pull/7647/files
  *
  * AbstractCoordinator implements group management for a single group member by interacting with
  * a designated Kafka broker (the coordinator). Group semantics are provided by extending this class.
@@ -430,7 +430,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 // Can't use synchronized for {@code onJoinComplete}, because it can be long enough
                 // and  shouldn't block hearbeat thread.
                 // See {@link PlaintextConsumerTest#testMaxPollIntervalMsDelayInAssignment
-                synchronized (this) {
+                synchronized (AbstractCoordinator.this) {
                     generationSnapshot = this.generation;
                 }
 
@@ -440,13 +440,16 @@ public abstract class AbstractCoordinator implements Closeable {
 
                     onJoinComplete(generationSnapshot.generationId, generationSnapshot.memberId, generationSnapshot.protocol, memberAssignment);
 
-                    // We reset the join group future only after the completion callback returns. This ensures
+                    // Generally speaking we should always resetJoinGroupFuture once the future is done, but here
+                    // we can only reset the join group future after the completion callback returns. This ensures
                     // that if the callback is woken up, we will retry it on the next joinGroupIfNeeded.
+                    // And because of that we should explicitly trigger resetJoinGroupFuture in other conditions below.
                     resetJoinGroupFuture();
                     needsJoinPrepare = true;
                 } else {
                     log.info("Generation data was cleared by heartbeat thread. Initiating rejoin.");
                     resetStateAndRejoin();
+                    resetJoinGroupFuture();
 
                     return false;
                 }
@@ -468,7 +471,7 @@ public abstract class AbstractCoordinator implements Closeable {
         return true;
     }
 
-    private void resetStateAndRejoin() {
+    private synchronized void resetStateAndRejoin() {
         rejoinNeeded = true;
         state = MemberState.UNJOINED;
     }
