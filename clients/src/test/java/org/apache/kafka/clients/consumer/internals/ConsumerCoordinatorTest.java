@@ -2268,13 +2268,13 @@ public class ConsumerCoordinatorTest {
             assertFalse(client.hasPendingResponses());
             // SynGroupRequest not responded.
             assertEquals(1, client.inFlightRequestCount());
-            assertEquals(generationId, coordinator.generation().generationId);
-            assertEquals(memberId, coordinator.generation().memberId);
+            assertEquals(generationId, coordinator.generationAsIs().generationId);
+            assertEquals(memberId, coordinator.generationAsIs().memberId);
 
             // Imitating heartbeat thread that clears generation data.
             coordinator.maybeLeaveGroup();
 
-            assertEquals(AbstractCoordinator.Generation.NO_GENERATION, coordinator.generation());
+            assertEquals(AbstractCoordinator.Generation.NO_GENERATION, coordinator.generationAsIs());
 
             client.respond(syncGroupResponse(singletonList(t1p), Errors.NONE));
 

@@ -838,6 +838,12 @@ public abstract class AbstractCoordinator implements Closeable {
         }
     }
 
+    // Kafka 2.4 switched to basically the generation() call returning as is, and the old
+    // generation call being to generationIfStable().  Checked and all current code calls generation() and null checks.
+    protected synchronized Generation generationAsIs() {
+        return generation;
+    }
+
     /**
      * Get the current generation state if the group is stable.
      * @return the current generation or null if the group is unjoined/rebalancing
